@@ -1,0 +1,954 @@
+/* ruby-fuse
+ *
+ * A Ruby module to interact with the FUSE userland filesystem in
+ * a Rubyish way.
+ */
+
+ #define DEBUG /* */
+
+#define FUSE_USE_VERSION 26
+#define _FILE_OFFSET_BITS 64
+
+#include <fuse.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <ruby.h>
+#include <unistd.h>
+#include <stdarg.h>
+
+#include "rbfuse_fuse.h"
+
+/* init_time
+ *
+ * All files will have a modified time equal to this. */
+time_t init_time;
+
+
+
+/* Ruby Constants constants */
+VALUE cRbFuse      = Qnil; /* RbFuse class */
+VALUE cFSException = Qnil; /* Our Exception. */
+VALUE FuseRoot     = Qnil; /* The root object we call */
+
+/* IDs for calling methods on objects. */
+
+#define RMETHOD(name,cstr) \
+  const char *c_ ## name = cstr; \
+  ID name;
+
+RMETHOD(id_dir_contents,"contents");
+RMETHOD(id_read_file,"read_file");
+RMETHOD(id_write_to,"write_to");
+RMETHOD(id_delete,"delete");
+RMETHOD(id_mkdir,"mkdir");
+RMETHOD(id_rmdir,"rmdir");
+RMETHOD(id_touch,"touch");
+RMETHOD(id_size,"size");
+
+RMETHOD(is_directory,"directory?");
+RMETHOD(is_file,"file?");
+RMETHOD(is_executable,"executable?");
+
+RMETHOD(id_raw_open,"raw_open");
+RMETHOD(id_raw_close,"raw_close");
+RMETHOD(id_raw_read,"raw_read");
+RMETHOD(id_raw_write,"raw_write");
+
+RMETHOD(id_dup,"dup");
+
+
+ 
+static int writable(const char* path){
+  return 1;
+}
+static int deletable(const char* path){
+  return 1;
+}
+static int mkdirable(const char* path){
+  return 1;
+}
+static int rmdirable(const char* path){
+  return 1; 
+}
+
+typedef unsigned long int (*rbfunc)();
+
+/* debug()
+ *
+ * If #define DEBUG is enabled, then this acts as a printf to stderr
+ */
+static inline void
+debug(const char *msg,...) {
+#ifdef DEBUG
+  va_list ap;
+  va_start(ap,msg);
+  vfprintf(stderr,msg,ap);
+#endif
+}
+
+static VALUE
+rf_funcall(VALUE recv,const char *methname, VALUE arg) ;
+
+
+static VALUE
+get_stat(const char* path){
+  VALUE args=rb_ary_new();
+  rb_ary_push(args,rb_str_new_cstr(path));
+  return rf_funcall(FuseRoot,"stat",args);
+}
+static mode_t 
+get_stat_filetype(VALUE stat){
+  VALUE ft=rf_funcall(stat,"filetype",Qnil);
+  if(FIXNUM_P(ft)){
+    return FIX2LONG(ft);
+  }else{
+    return 0;
+  }
+}
+
+static int
+stat_is_dir(VALUE stat){
+  mode_t ftype=get_stat_filetype(stat);
+  return ftype==S_IFDIR; 
+}
+static int
+stat_is_reg(VALUE stat){
+  mode_t ftype=get_stat_filetype(stat);
+  return ftype==S_IFREG; 
+}
+
+
+/* rf_protected and rf_call
+ *
+ * Used for: protection.
+ *
+ * This is called by rb_protect, and will make a call using
+ * the above rb_path and to_call ID to call the method safely
+ * on FuseRoot.
+ *
+ * We call rf_call(path,method_id), and rf_call will use rb_protect
+ *   to call rf_protected, which makes the call on FuseRoot and returns
+ *   whatever the call returns.
+ */
+static VALUE
+rf_protected(VALUE args) {
+  ID to_call = SYM2ID(rb_ary_shift(args));
+  return rb_apply(FuseRoot,to_call,args);
+}
+
+static VALUE
+rf_protected_call(VALUE args) {
+  VALUE recv = rb_ary_shift(args);
+  ID to_call = SYM2ID(rb_ary_shift(args));
+  return rb_apply(recv,to_call,args);
+}
+
+
+#define rf_call(p,m,a) \
+  rf_mcall(p,m, c_ ## m, a)
+
+static VALUE
+rf_mcall(const char *path, ID method, const char *methname, VALUE arg) {
+  int error;
+  VALUE result;
+  VALUE methargs;
+
+  if (!rb_respond_to(FuseRoot,method)) {
+    return Qnil;
+  }
+
+  if (arg == Qnil) {
+    debug("    root.%s(%s)\n", methname, path );
+  } else {
+    debug("    root.%s(%s,...)\n", methname, path );
+  }
+
+  if (TYPE(arg) == T_ARRAY) {
+    methargs = arg;
+  } else if (arg != Qnil) {
+    methargs = rb_ary_new();
+    rb_ary_push(methargs,arg);
+  } else {
+    methargs = rb_ary_new();
+  }
+
+  rb_ary_unshift(methargs,rb_str_new2(path));
+  rb_ary_unshift(methargs,ID2SYM(method));
+
+  /* Set up the call and make it. */
+  result = rb_protect(rf_protected, methargs, &error);
+ 
+  /* Did it error? */
+  if (error) return Qnil;
+
+  return result;
+}
+
+static VALUE
+rf_funcall(VALUE recv,const char *methname, VALUE arg) {
+  int error;
+  VALUE result;
+  VALUE methargs;
+
+  ID method=rb_intern(methname);
+
+  if (!rb_respond_to(recv,method)) {
+    debug("not respond %s",methname);
+    return Qnil;
+  }
+
+  if (arg == Qnil) {
+    debug("    root.%s\n", methname );
+  } else {
+    debug("    root.%s(...)\n", methname);
+  }
+
+  if (TYPE(arg) == T_ARRAY) {
+    methargs = arg;
+  } else if (arg != Qnil) {
+    methargs = rb_ary_new();
+    rb_ary_push(methargs,arg);
+  } else {
+    methargs = rb_ary_new();
+  }
+
+  rb_ary_unshift(methargs,ID2SYM(method));
+  rb_ary_unshift(methargs,recv);
+
+  /* Set up the call and make it. */
+  result = rb_protect(rf_protected_call, methargs, &error);
+ 
+  /* Did it error? */
+  if (error){debug("error\n"); return Qnil;}
+
+  return result;
+}
+
+
+
+
+/* rf_getattr
+ *
+ * Used when: 'ls', and before opening a file.
+ *
+ * FuseFS will call: directory? and file? on FuseRoot
+ *   to determine if the path in question is pointing
+ *   at a directory or file. The permissions attributes
+ *   will be 777 (dirs) and 666 (files) xor'd with FuseFS.umask
+ */
+static int
+rf_getattr(const char *path, struct stat *stbuf) {
+  /* If it doesn't exist, it doesn't exist. Simple as that. */
+
+  debug("rf_getattr(%s)\n", path );
+  /* Zero out the stat buffer */
+  memset(stbuf, 0, sizeof(struct stat));
+
+  /* "/" is automatically a dir. */
+  if (strcmp(path,"/") == 0) {
+    stbuf->st_mode = S_IFDIR | 0755;
+    stbuf->st_nlink = 3;
+    stbuf->st_uid = getuid();
+    stbuf->st_gid = getgid();
+    stbuf->st_mtime = init_time;
+    stbuf->st_atime = init_time;
+    stbuf->st_ctime = init_time;
+    return 0;
+  }
+
+ 
+
+
+  /* If FuseRoot says the path is a directory, we set it 0555.
+   * If FuseRoot says the path is a file, it's 0444.
+   *
+   * Otherwise, -ENOENT */
+  debug("Checking filetype ...");
+  if (RTEST(rf_call(path, is_directory,Qnil))) {
+    debug(" directory.\n");
+    stbuf->st_mode = S_IFDIR | 0555;
+    stbuf->st_nlink = 1;
+    stbuf->st_size = 4096;
+    stbuf->st_uid = getuid();
+    stbuf->st_gid = getgid();
+    stbuf->st_mtime = init_time;
+    stbuf->st_atime = init_time;
+    stbuf->st_ctime = init_time;
+    return 0;
+  } else if (RTEST(rf_call(path, is_file,Qnil))) {
+    VALUE rsize;
+    debug(" file.\n");
+    stbuf->st_mode = S_IFREG | 0444;
+    if (writable(path)) {
+      stbuf->st_mode |= 0666;
+    }
+    if (RTEST(rf_call(path,is_executable,Qnil))) {
+      stbuf->st_mode |= 0111;
+    }
+    stbuf->st_nlink = 1 ;
+    if (RTEST(rsize = rf_call(path,id_size,Qnil)) && FIXNUM_P(rsize)) {
+      stbuf->st_size = FIX2LONG(rsize);
+    } else {
+      stbuf->st_size = 0;
+    }
+    stbuf->st_uid = getuid();
+    stbuf->st_gid = getgid();
+    stbuf->st_mtime = init_time;
+    stbuf->st_atime = init_time;
+    stbuf->st_ctime = init_time;
+    return 0;
+  }
+  debug(" nonexistant.\n");
+  return -ENOENT;
+}
+
+/* rf_readdir
+ *
+ * Used when: 'ls'
+ *
+ * FuseFS will call: 'directory?' on FuseRoot with the given path
+ *   as an argument. If the return value is true, then it will in turn
+ *   call 'contents' and expects to receive an array of file contents.
+ *
+ * '.' and '..' are automatically added, so the programmer does not
+ *   need to worry about those.
+ */
+static int
+rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+           off_t offset, struct fuse_file_info *fi) {
+  VALUE cur_entry;
+  VALUE retval;
+
+  debug("rf_readdir(%s)\n", path );
+
+  /* This is what fuse does to turn off 'unused' warnings. */
+  (void) offset;
+  (void) fi;
+
+  /* FuseRoot must exist */
+  if (FuseRoot == Qnil) {
+    if (!strcmp(path,"/")) {
+      filler(buf,".", NULL, 0);
+      filler(buf,"..", NULL, 0);
+      return 0;
+    }
+    return -ENOENT;
+  }
+
+  if (strcmp(path,"/") != 0) {
+    debug("  Checking is_directory? ...");
+    retval = rf_call(path, is_directory,Qnil);
+
+    if (!RTEST(retval)) {
+      debug(" no.\n");
+      return -ENOENT;
+    }
+    debug(" yes.\n");
+  }
+ 
+  /* These two are Always in a directory */
+  filler(buf,".", NULL, 0);
+  filler(buf,"..", NULL, 0);
+
+  retval = rf_call(path, id_dir_contents,Qnil);
+  if (!RTEST(retval)) {
+    return 0;
+  }
+  if (TYPE(retval) != T_ARRAY) {
+    return 0;
+  }
+
+  /* Duplicate the array, just in case. */
+  /* TODO: Do this better! */
+  retval = rb_funcall(retval,id_dup,0);
+
+  while ((cur_entry = rb_ary_shift(retval)) != Qnil) {
+
+    if (TYPE(cur_entry) != T_STRING)
+      continue;
+
+    filler(buf,StringValueCStr(cur_entry),NULL,0);
+  }
+  return 0;
+}
+
+/* rf_mknod
+ *
+ * Used when: This is called when a file is created.
+ *
+ * Note that this is actually almost useless to FuseFS, so all we do is check
+ *   if a path is writable? and if so, return true. The open() will do the
+ *   actual work of creating the file.
+ */
+static int
+rf_mknod(const char *path, mode_t umode, dev_t rdev) {
+
+  debug("rf_mknod(%s)\n", path);
+  /* Make sure it's not already open. */
+  
+  debug("  Checking if it's opened ...");
+
+  /* We ONLY permit regular files. No blocks, characters, fifos, etc. */
+  debug("  Checking if an IFREG is requested ...");
+  if (!S_ISREG(umode)) {
+    debug(" no.\n");
+    return -EACCES;
+  }
+  debug(" yes.\n");
+
+ 
+  debug("  Checking if it's a file ..." );
+  if (RTEST(rf_call(path, is_file,Qnil))) {
+    debug(" yes.\n");
+    return -EEXIST;
+  }
+  debug(" no.\n");
+
+  /* Is this writable to */
+  debug("  Checking if it's writable to ...");
+  if (!writable(path)) {
+    debug(" no.\n");
+    debug("  Checking if it looks like an editor tempfile...");
+    debug(" no.\n");
+    return -EACCES;
+  }
+  debug(" yes.\n");
+
+  debug("call create method\n");
+  VALUE args=rb_ary_new();
+  VALUE pv=rb_str_new_cstr(path);
+  rb_ary_push(args,pv);
+  rf_funcall(FuseRoot,"create",args);
+
+
+  return 0;
+}
+
+/* rf_open
+ *
+ * Used when: A file is opened for read or write.
+ *
+ * If called to open a file for reading, then FuseFS will call "read_file" on
+ *   FuseRoot, and store the results into the linked list of "opened_file"
+ *   structures, so as to provide the same file for mmap, all excutes of
+ *   read(), and preventing more than one call to FuseRoot.
+ *
+ * If called on a file opened for writing, FuseFS will first double check
+ *   if the file is writable to by calling "writable?" on FuseRoot, passing
+ *   the path. If the return value is a truth value, it will create an entry
+ *   into the opened_file list, flagged as for writing.
+ *
+ * If called with any other set of flags, this will return -ENOPERM, since
+ *   FuseFS does not (currently) need to support anything other than direct
+ *   read and write.
+ */
+static int
+rf_open(const char *path, struct fuse_file_info *fi) {
+  char open_opts[4], *optr;
+
+  debug("rf_open(%s)\n", path);
+
+ 
+
+  optr = open_opts;
+  switch (fi->flags & 3) {
+  case 0:
+    *(optr++) = 'r';
+    break;
+  case 1:
+    *(optr++) = 'w';
+    break;
+  case 2:
+    *(optr++) = 'w';
+    *(optr++) = 'r';
+    break;
+  default:
+    debug("Opening a file with something other than rd, wr, or rdwr?");
+  }
+  if (fi->flags & O_APPEND)
+    *(optr++) = 'a';
+  *(optr) = '\0';
+
+  debug("  Checking for a raw_opened file... ");
+  VALUE args=rb_ary_new();
+  rb_ary_push(args,rb_str_new_cstr(path));
+  rb_ary_push(args,rb_str_new_cstr(open_opts));
+  if (RTEST(rf_funcall(FuseRoot,"open",args))) {
+    return 0;
+  }else{
+    return -ENOENT;
+  }
+
+ 
+
+}
+
+/* rf_release
+ *
+ * Used when: A file is no longer being read or written to.
+ *
+ * If release is called on a written file, FuseFS will call 'write_to' on
+ *   FuseRoot, passing the path and contents of the file. It will then
+ *   clear the file information from the in-memory file storage that
+ *   FuseFS uses to prevent FuseRoot from receiving incomplete files.
+ *
+ * If called on a file opened for reading, FuseFS will just clear the
+ *   in-memory copy of the return value from rf_open.
+ */
+static int
+rf_release(const char *path, struct fuse_file_info *fi) {
+   debug("rf_release(%s)\n", path);
+
+
+
+  /* If it's opened for raw read/write, call raw_close */
+  VALUE args=rb_ary_new();
+  rb_ary_push(args,rb_str_new_cstr(path));
+  rf_funcall(FuseRoot,"close",args);
+  
+
+  return 0;
+ 
+}
+
+/* rf_touch
+ *
+ * Used when: A program tries to modify the file's times.
+ *
+ * We use this for a neat side-effect thingy. When a file is touched, we
+ * call the "touch" method. i.e: "touch button" would call
+ * "FuseRoot.touch('/button')" and something *can* happen. =).
+ */
+static int
+rf_touch(const char *path, struct utimbuf *ignore) {
+  debug("rf_touch(%s)\n", path);
+  rf_call(path,id_touch,Qnil);
+  return 0;
+}
+
+/* rf_rename
+ *
+ * Used when: a file is renamed.
+ *
+ * When FuseFS receives a rename command, it really just removes the old file
+ *   and creates the new file with the same contents.
+ */
+static int
+rf_rename(const char *path, const char *dest) {
+  VALUE pathv=rb_str_new_cstr(path);
+  VALUE destv=rb_str_new_cstr(dest);
+
+  VALUE args=rb_ary_new();
+  rb_ary_push(args,pathv);
+  rb_ary_push(args,destv);
+  VALUE ret=rf_funcall(FuseRoot,"rename",args);
+  if(RTEST(ret)){
+    return 0;
+  }else{
+    return -EACCES;
+  }
+
+}
+
+/* rf_unlink
+ *
+ * Used when: a file is removed.
+ *
+ * This calls can_remove? and remove() on FuseRoot.
+ */
+static int
+rf_unlink(const char *path) {
+  /* Does it exist to be removed? */
+  debug("  Checking if it exists...");
+  VALUE stat=get_stat(path);
+  if (!stat_is_reg(stat)) {
+    debug(" no.\n");
+    return -ENOENT;
+  }
+  debug(" yes.\n");
+
+  /* Can we remove it? */
+  debug("  Checking if we can remove it...");
+  if (!deletable(path)) {
+    debug(" yes.\n");
+    return -EACCES;
+  }
+  debug(" no.\n");
+ 
+  /* Ok, remove it! */
+  debug("  Removing it.\n");
+  rf_call(path,id_delete,Qnil);
+  return 0;
+
+}
+
+/* rf_truncate
+ *
+ * Used when: a file is truncated.
+ *
+ * If this is an existing file?, that is writable? to, then FuseFS will
+ *   read the file, truncate it, and call write_to with the new value.
+ */
+static int
+rf_truncate(const char *path, off_t length) {
+  debug( "rf_truncate(%s,%d)\n", path, length );
+
+  
+
+  /* Does it exist to be truncated? */
+  VALUE stat=get_stat(path);
+  if(!stat_is_reg(stat)){
+    return -ENOENT;
+  }
+  
+  if(rb_respond_to(FuseRoot,rb_intern("truncate"))){
+    VALUE args=rb_ary_new();
+    rb_ary_push(args,rb_str_new_cstr(path));
+    rb_ary_push(args,LONG2NUM(length));
+    rf_funcall(FuseRoot,"truncate",args);
+    return 0;
+  }
+
+ 
+  return -EACCES;
+
+}
+
+/* rf_mkdir
+ *
+ * Used when: A user calls 'mkdir'
+ *
+ * This calls can_mkdir? and mkdir() on FuseRoot.
+ */
+static int
+rf_mkdir(const char *path, mode_t mode) {
+  debug("rf_mkdir(%s)",path);
+  /* Does it exist? */
+
+  VALUE stat=get_stat(path);
+  if(RTEST(stat)) return -EEXIST;
+
+  /* Can we mkdir it? */
+  if (!mkdirable(path))
+    return -EACCES;
+ 
+  /* Ok, mkdir it! */
+  rf_call(path,id_mkdir,Qnil);
+  return 0;
+ 
+
+}
+
+/* rf_rmdir
+ *
+ * Used when: A user calls 'rmdir'
+ *
+ * This calls can_rmdir? and rmdir() on FuseRoot.
+ */
+static int
+rf_rmdir(const char *path) {
+  debug("rf_rmdir(%s)",path);
+  /* Does it exist? */
+  VALUE stat=get_stat(path);
+  if(RTEST(stat)){
+    if(!stat_is_dir(stat))  return -ENOTDIR;
+  }else{
+    return -ENOENT;
+  }
+
+  /* Can we rmdir it? */
+  if (!rmdirable(path))
+    return -EACCES;
+ 
+  /* Ok, rmdir it! */
+  rf_call(path,id_rmdir,Qnil);
+  return 0;
+
+}
+
+/* rf_write
+ *
+ * Used when: a file is written to by the user.
+ *
+ * This does not access FuseRoot at all. Instead, it appends the written
+ *   data to the opened_file entry, growing its memory usage if necessary.
+ */
+static int
+rf_write(const char *path, const char *buf, size_t size, off_t offset,
+         struct fuse_file_info *fi) {
+    debug("rf_write(%s)",path);
+
+
+  debug( "  Offset is %d\n", offset );
+
+
+
+  /* Make sure it's open for write ... */
+  /* If it's opened for raw read/write, call raw_write */
+  debug("  Checking if it's opened for raw write...");
+    /* raw read */
+    VALUE args = rb_ary_new();
+    debug(" yes.\n");
+    rb_ary_push(args,rb_str_new_cstr(path));
+    rb_ary_push(args,INT2NUM(offset));
+    rb_ary_push(args,rb_str_new(buf,size));
+    rf_funcall(FuseRoot,"write",args);
+  return size;
+
+}
+
+/* rf_read
+ *
+ * Used when: A file opened by rf_open is read.
+ *
+ * In most cases, this does not access FuseRoot at all. It merely reads from
+ * the already-read 'file' that is saved in the opened_file list.
+ *
+ * For files opened with raw_open, it calls raw_read
+ */
+static int
+rf_read(const char *path, char *buf, size_t size, off_t offset,
+        struct fuse_file_info *fi) {
+    debug( "rf_read(%s)\n", path );
+
+
+    /* If it's opened for raw read/write, call raw_read */
+    /* raw read */
+    VALUE args = rb_ary_new();
+    rb_ary_push(args,rb_str_new_cstr(path));
+    rb_ary_push(args,INT2NUM(offset));
+    rb_ary_push(args,INT2NUM(size));
+    VALUE ret = rf_funcall(FuseRoot,"read",args);
+    if (!RTEST(ret))
+      return 0;
+    if (TYPE(ret) != T_STRING)
+      return 0;
+    size_t len=RSTRING_LEN(ret);
+    if(size<len)len=size;
+    memcpy(buf, RSTRING_PTR(ret), len);
+    return len;
+
+ 
+}
+
+static int
+rf_fsyncdir(const char * path, int p, struct fuse_file_info *fi)
+{
+  return 0;
+}
+
+static int 
+rf_utime(const char *path, struct utimbuf *ubuf)
+{
+  return 0;
+}
+
+static int
+rf_statfs(const char *path, struct statvfs *buf)
+{
+  return 0;
+}
+
+/* rf_oper
+ *
+ * Used for: FUSE utilizes this to call operations at the appropriate time.
+ *
+ * This is utilized by rf_mount
+ */
+static struct fuse_operations rf_oper = {
+    .getattr   = rf_getattr,
+    .readdir   = rf_readdir,
+    .mknod     = rf_mknod,
+    .unlink    = rf_unlink,
+    .mkdir     = rf_mkdir,
+    .rmdir     = rf_rmdir,
+    .truncate  = rf_truncate,
+    .rename    = rf_rename,
+    .open      = rf_open,
+    .release   = rf_release,
+    .utime     = rf_touch,
+    .read      = rf_read,
+    .write     = rf_write,
+    .fsyncdir  = rf_fsyncdir,
+    .utime     = rf_utime,
+    .statfs    = rf_statfs,
+};
+
+/* rf_set_root
+ *
+ * Used by: FuseFS.set_root
+ *
+ * This defines FuseRoot, which is the crux of FuseFS. It is required to
+ *   have the methods "directory?" "file?" "contents" "writable?" "read_file"
+ *   and "write_to"
+ */
+VALUE
+rf_set_root(VALUE self, VALUE rootval) {
+  if (self != cRbFuse) {
+    rb_raise(cFSException,"Error: 'set_root' called outside of FuseFS?!");
+    return Qnil;
+  }
+
+  rb_iv_set(cRbFuse,"@root",rootval);
+  FuseRoot = rootval;
+  return Qtrue;
+}
+
+
+
+/* rf_mount_to
+ *
+ * Used by: FuseFS.mount_to(dir)
+ *
+ * FuseFS.mount_to(dir) calls FUSE to mount FuseFS under the given directory.
+ */
+VALUE
+rf_mount_to(int argc, VALUE *argv, VALUE self) {
+  struct fuse_args *opts;
+  VALUE mountpoint;
+  int i;
+  char *cur;
+
+  if (self != cRbFuse) {
+    rb_raise(cFSException,"Error: 'mount_to' called outside of FuseFS?!");
+    return Qnil;
+  }
+
+  if (argc == 0) {
+    rb_raise(rb_eArgError,"mount_to requires at least 1 argument!");
+    return Qnil;
+  }
+
+  mountpoint = argv[0];
+
+  Check_Type(mountpoint, T_STRING);
+  opts = ALLOC(struct fuse_args);
+  opts->argc = argc;
+  opts->argv = ALLOC_N(char *, opts->argc);
+  opts->allocated = 1;
+  
+  opts->argv[0] = strdup("-odirect_io");
+
+  for (i = 1; i < argc; i++) {
+    cur = StringValuePtr(argv[i]);
+    opts->argv[i] = ALLOC_N(char, RSTRING_LEN(argv[i]) + 2);
+    sprintf(opts->argv[i], "-o%s", cur);
+  }
+
+  rb_iv_set(cRbFuse,"@mountpoint",mountpoint);
+  fusefs_setup(StringValueCStr(mountpoint), &rf_oper, opts);
+  return Qtrue;
+}
+
+/* rf_fd
+ *
+ * Used by: FuseFS.fuse_fd(dir)
+ *
+ * FuseFS.fuse_fd returns the file descriptor of the open handle on the
+ *   /dev/fuse object that is utilized by FUSE. This is crucial for letting
+ *   ruby keep control of the script, as it can now use IO.select, rather
+ *   than turning control over to fuse_main.
+ */
+VALUE
+rf_fd(VALUE self) {
+  int fd = fusefs_fd();
+  if (fd < 0)
+    return Qnil;
+  return INT2NUM(fd);
+}
+
+/* rf_process
+ *
+ * Used for: FuseFS.process
+ *
+ * rf_process, which calls fusefs_process, is the other crucial portion to
+ *   keeping ruby in control of the script. fusefs_process will read and
+ *   process exactly one command from the fuse_fd. If this is called when
+ *   there is no incoming data waiting, it *will* hang until it receives a
+ *   command on the fuse_fd
+ */
+VALUE
+rf_process(VALUE self) {
+  fusefs_process();
+  return Qnil;
+}
+
+
+/* rf_uid and rf_gid
+ *
+ * Used by: FuseFS.reader_uid and FuseFS.reader_gid
+ *
+ * These return the UID and GID of the processes that are causing the
+ *   separate Fuse methods to be called. This can be used for permissions
+ *   checking, returning a different file for different users, etc.
+ */
+VALUE
+rf_uid(VALUE self) {
+  int fd = fusefs_uid();
+  if (fd < 0)
+    return Qnil;
+  return INT2NUM(fd);
+}
+
+VALUE
+rf_gid(VALUE self) {
+  int fd = fusefs_gid();
+  if (fd < 0)
+    return Qnil;
+  return INT2NUM(fd);
+}
+
+/* Init_fusefs_lib()
+ *
+ * Used by: Ruby, to initialize FuseFS.
+ *
+ * This is just stuff to set up and establish the Ruby module FuseFS and
+ *   its methods.
+ */
+void
+Init_fusefs_lib() {
+  init_time = time(NULL);
+
+  /* module FuseFS */
+  cRbFuse = rb_define_module("RbFuse");
+
+  /* Our exception */
+  cFSException = rb_define_class_under(cRbFuse,"RbFuseException",rb_eStandardError);
+
+  /* def Fuse.run */
+  rb_define_singleton_method(cRbFuse,"fuse_fd",     (rbfunc) rf_fd, 0);
+  rb_define_singleton_method(cRbFuse,"reader_uid",  (rbfunc) rf_uid, 0);
+  rb_define_singleton_method(cRbFuse,"uid",         (rbfunc) rf_uid, 0);
+  rb_define_singleton_method(cRbFuse,"reader_gid",  (rbfunc) rf_gid, 0);
+  rb_define_singleton_method(cRbFuse,"gid",         (rbfunc) rf_gid, 0);
+  rb_define_singleton_method(cRbFuse,"process",     (rbfunc) rf_process, 0);
+  rb_define_singleton_method(cRbFuse,"mount_to",    (rbfunc) rf_mount_to, -1);
+  rb_define_singleton_method(cRbFuse,"mount_under", (rbfunc) rf_mount_to, -1);
+  rb_define_singleton_method(cRbFuse,"mountpoint",  (rbfunc) rf_mount_to, -1);
+  rb_define_singleton_method(cRbFuse,"set_root",    (rbfunc) rf_set_root, 1);
+  rb_define_singleton_method(cRbFuse,"root=",       (rbfunc) rf_set_root, 1);
+
+#undef RMETHOD
+#define RMETHOD(name,cstr) \
+  name = rb_intern(cstr);
+
+  RMETHOD(id_dir_contents,"contents");
+  RMETHOD(id_read_file,"read_file");
+  RMETHOD(id_write_to,"write_to");
+  RMETHOD(id_delete,"delete");
+  RMETHOD(id_mkdir,"mkdir");
+  RMETHOD(id_rmdir,"rmdir");
+  RMETHOD(id_touch,"touch");
+  RMETHOD(id_size,"size");
+
+  RMETHOD(is_directory,"directory?");
+  RMETHOD(is_file,"file?");
+  RMETHOD(is_executable,"executable?");
+
+
+  RMETHOD(id_dup,"dup");
+}
