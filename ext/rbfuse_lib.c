@@ -34,31 +34,10 @@ VALUE cRbFuse      = Qnil; /* RbFuse class */
 VALUE cFSException = Qnil; /* Our Exception. */
 VALUE FuseRoot     = Qnil; /* The root object we call */
 
-/* IDs for calling methods on objects. */
 
-#define RMETHOD(name,cstr) \
-  const char *c_ ## name = cstr; \
-  ID name;
 
-RMETHOD(id_dir_contents,"contents");
-RMETHOD(id_read_file,"read_file");
-RMETHOD(id_write_to,"write_to");
-RMETHOD(id_delete,"delete");
-RMETHOD(id_mkdir,"mkdir");
-RMETHOD(id_rmdir,"rmdir");
-RMETHOD(id_touch,"touch");
-RMETHOD(id_size,"size");
 
-RMETHOD(is_directory,"directory?");
-RMETHOD(is_file,"file?");
-RMETHOD(is_executable,"executable?");
 
-RMETHOD(id_raw_open,"raw_open");
-RMETHOD(id_raw_close,"raw_close");
-RMETHOD(id_raw_read,"raw_read");
-RMETHOD(id_raw_write,"raw_write");
-
-RMETHOD(id_dup,"dup");
 
 
  
@@ -110,6 +89,10 @@ get_stat_filetype(VALUE stat){
   }
 }
 
+static VALUE handle_table(){
+  return rb_iv_get(cRbFuse,"@handles");
+}
+
 static int
 stat_is_dir(VALUE stat){
   mode_t ftype=get_stat_filetype(stat);
@@ -122,23 +105,7 @@ stat_is_reg(VALUE stat){
 }
 
 
-/* rf_protected and rf_call
- *
- * Used for: protection.
- *
- * This is called by rb_protect, and will make a call using
- * the above rb_path and to_call ID to call the method safely
- * on FuseRoot.
- *
- * We call rf_call(path,method_id), and rf_call will use rb_protect
- *   to call rf_protected, which makes the call on FuseRoot and returns
- *   whatever the call returns.
- */
-static VALUE
-rf_protected(VALUE args) {
-  ID to_call = SYM2ID(rb_ary_shift(args));
-  return rb_apply(FuseRoot,to_call,args);
-}
+
 
 static VALUE
 rf_protected_call(VALUE args) {
@@ -148,45 +115,7 @@ rf_protected_call(VALUE args) {
 }
 
 
-#define rf_call(p,m,a) \
-  rf_mcall(p,m, c_ ## m, a)
 
-static VALUE
-rf_mcall(const char *path, ID method, const char *methname, VALUE arg) {
-  int error;
-  VALUE result;
-  VALUE methargs;
-
-  if (!rb_respond_to(FuseRoot,method)) {
-    return Qnil;
-  }
-
-  if (arg == Qnil) {
-    debug("    root.%s(%s)\n", methname, path );
-  } else {
-    debug("    root.%s(%s,...)\n", methname, path );
-  }
-
-  if (TYPE(arg) == T_ARRAY) {
-    methargs = arg;
-  } else if (arg != Qnil) {
-    methargs = rb_ary_new();
-    rb_ary_push(methargs,arg);
-  } else {
-    methargs = rb_ary_new();
-  }
-
-  rb_ary_unshift(methargs,rb_str_new2(path));
-  rb_ary_unshift(methargs,ID2SYM(method));
-
-  /* Set up the call and make it. */
-  result = rb_protect(rf_protected, methargs, &error);
- 
-  /* Did it error? */
-  if (error) return Qnil;
-
-  return result;
-}
 
 static VALUE
 rf_funcall(VALUE recv,const char *methname, VALUE arg) {
@@ -240,6 +169,80 @@ rf_funcall(VALUE recv,const char *methname, VALUE arg) {
  *   at a directory or file. The permissions attributes
  *   will be 777 (dirs) and 666 (files) xor'd with FuseFS.umask
  */
+
+static int
+rf_getattr2(const char*path,struct stat* stbuf){
+
+  debug("rf_getattr2(%s)\n", path );
+  /* Zero out the stat buffer */
+  memset(stbuf, 0, sizeof(struct stat));
+
+  if (strcmp(path,"/") == 0) {
+    stbuf->st_mode = S_IFDIR | 0755;
+    stbuf->st_size = 4096;
+    stbuf->st_nlink = 1;
+    stbuf->st_uid = getuid();
+    stbuf->st_gid = getgid();
+    stbuf->st_mtime = init_time;
+    stbuf->st_atime = init_time;
+    stbuf->st_ctime = init_time;
+    return 0;
+  }
+
+
+  VALUE stat=get_stat(path);
+  if(RTEST(stat)){
+     
+    VALUE perm=rf_funcall(stat,"perm",Qnil);
+    perm=rb_funcall(stat,rb_intern("perm"),0);
+    if(!FIXNUM_P(perm))return -ENOENT;
+    mode_t perm_m=FIX2LONG(perm);
+   
+    mode_t filetype_m=get_stat_filetype(stat);
+    if(filetype_m==0)return -ENOENT;
+
+    stbuf->st_mode=perm_m|filetype_m;
+
+    
+    VALUE size=rf_funcall(stat,"size",Qnil);
+    if(!FIXNUM_P(size))return -ENOENT;
+    stbuf->st_size=FIX2LONG(size);
+ 
+    VALUE nlink=rf_funcall(stat,"nlink",Qnil);
+    if(!FIXNUM_P(nlink))return -ENOENT;
+    stbuf->st_nlink=FIX2LONG(nlink);
+
+    VALUE uid=rf_funcall(stat,"uid",Qnil);
+    if(!FIXNUM_P(uid))return -ENOENT;
+    stbuf->st_uid=FIX2INT(uid);
+
+    VALUE gid=rf_funcall(stat,"gid",Qnil);
+    if(!FIXNUM_P(gid))return -ENOENT;
+    stbuf->st_gid=FIX2INT(gid);
+
+    VALUE atime=rf_funcall(stat,"atime",Qnil);
+    VALUE atimei=rf_funcall(atime,"to_i",Qnil);
+    if(!RTEST(atimei))return -ENOENT;
+    stbuf->st_atime=NUM2LONG(atimei);
+
+    VALUE mtime=rf_funcall(stat,"mtime",Qnil);
+    VALUE mtimei=rf_funcall(mtime,"to_i",Qnil);
+    if(!RTEST(mtimei))return -ENOENT;
+    stbuf->st_mtime=NUM2LONG(mtimei);
+
+    VALUE ctime=rf_funcall(stat,"ctime",Qnil);
+    VALUE ctimei=rf_funcall(ctime,"to_i",Qnil);
+    if(!RTEST(ctimei))return -ENOENT;
+    stbuf->st_ctime=NUM2LONG(ctimei);
+   
+    return 0;
+  }else{
+    return -ENOENT;
+  }
+}
+
+
+
 static int
 rf_getattr(const char *path, struct stat *stbuf) {
   /* If it doesn't exist, it doesn't exist. Simple as that. */
@@ -267,8 +270,9 @@ rf_getattr(const char *path, struct stat *stbuf) {
    * If FuseRoot says the path is a file, it's 0444.
    *
    * Otherwise, -ENOENT */
+  VALUE vpath=rb_str_new_cstr(path);
   debug("Checking filetype ...");
-  if (RTEST(rf_call(path, is_directory,Qnil))) {
+  if (RTEST(rf_funcall(cRbFuse, "directory?",vpath))) {
     debug(" directory.\n");
     stbuf->st_mode = S_IFDIR | 0555;
     stbuf->st_nlink = 1;
@@ -279,18 +283,18 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_atime = init_time;
     stbuf->st_ctime = init_time;
     return 0;
-  } else if (RTEST(rf_call(path, is_file,Qnil))) {
+  } else if (RTEST(rf_funcall(cRbFuse,"file?",vpath))) {
     VALUE rsize;
     debug(" file.\n");
     stbuf->st_mode = S_IFREG | 0444;
     if (writable(path)) {
       stbuf->st_mode |= 0666;
     }
-    if (RTEST(rf_call(path,is_executable,Qnil))) {
+    if (RTEST(rf_funcall(cRbFuse,"executable?",vpath))) {
       stbuf->st_mode |= 0111;
     }
     stbuf->st_nlink = 1 ;
-    if (RTEST(rsize = rf_call(path,id_size,Qnil)) && FIXNUM_P(rsize)) {
+    if (RTEST(rsize = rf_funcall(cRbFuse,"size",vpath)) && FIXNUM_P(rsize)) {
       stbuf->st_size = FIX2LONG(rsize);
     } else {
       stbuf->st_size = 0;
@@ -320,7 +324,6 @@ rf_getattr(const char *path, struct stat *stbuf) {
 static int
 rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
            off_t offset, struct fuse_file_info *fi) {
-  VALUE cur_entry;
   VALUE retval;
 
   debug("rf_readdir(%s)\n", path );
@@ -341,7 +344,7 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
   if (strcmp(path,"/") != 0) {
     debug("  Checking is_directory? ...");
-    retval = rf_call(path, is_directory,Qnil);
+    retval = rf_funcall(cRbFuse,"directory?",rb_str_new_cstr(path));
 
     if (!RTEST(retval)) {
       debug(" no.\n");
@@ -354,7 +357,9 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   filler(buf,".", NULL, 0);
   filler(buf,"..", NULL, 0);
 
-  retval = rf_call(path, id_dir_contents,Qnil);
+  VALUE args=rb_ary_new();
+  rb_ary_push(args,rb_str_new_cstr(path));
+  retval = rf_funcall(cRbFuse, "contents",args);
   if (!RTEST(retval)) {
     return 0;
   }
@@ -362,16 +367,16 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return 0;
   }
 
-  /* Duplicate the array, just in case. */
-  /* TODO: Do this better! */
-  retval = rb_funcall(retval,id_dup,0);
+  size_t size=RARRAY_LEN(retval);
+  VALUE* vptr=RARRAY_PTR(retval);
+  size_t i;
+  for(i=0;i<size;i++ ) {
+    VALUE ent=vptr[i];
 
-  while ((cur_entry = rb_ary_shift(retval)) != Qnil) {
-
-    if (TYPE(cur_entry) != T_STRING)
+    if (TYPE(ent) != T_STRING)
       continue;
 
-    filler(buf,StringValueCStr(cur_entry),NULL,0);
+    filler(buf,StringValueCStr(ent),NULL,0);
   }
   return 0;
 }
@@ -400,9 +405,10 @@ rf_mknod(const char *path, mode_t umode, dev_t rdev) {
   }
   debug(" yes.\n");
 
+  VALUE stat=get_stat(path);
  
   debug("  Checking if it's a file ..." );
-  if (RTEST(rf_call(path, is_file,Qnil))) {
+  if (stat_is_reg(stat)) {
     debug(" yes.\n");
     return -EEXIST;
   }
@@ -474,9 +480,17 @@ rf_open(const char *path, struct fuse_file_info *fi) {
   *(optr) = '\0';
 
   debug("  Checking for a raw_opened file... ");
+  
+  VALUE handle=rb_class_new_instance(0,NULL,rb_cObject);
+
+  VALUE h_table=handle_table();
+  rb_hash_aset(h_table,handle,Qtrue);
+  fi->fh=handle;
+
   VALUE args=rb_ary_new();
   rb_ary_push(args,rb_str_new_cstr(path));
   rb_ary_push(args,rb_str_new_cstr(open_opts));
+  rb_ary_push(args,handle);
   if (RTEST(rf_funcall(FuseRoot,"open",args))) {
     return 0;
   }else{
@@ -503,13 +517,18 @@ static int
 rf_release(const char *path, struct fuse_file_info *fi) {
    debug("rf_release(%s)\n", path);
 
+  VALUE handle=fi->fh;
+  
 
 
   /* If it's opened for raw read/write, call raw_close */
   VALUE args=rb_ary_new();
   rb_ary_push(args,rb_str_new_cstr(path));
+  rb_ary_push(args,handle);
   rf_funcall(FuseRoot,"close",args);
-  
+  VALUE h_table=handle_table();
+  rb_hash_delete(h_table,handle);
+  rb_p(h_table);
 
   return 0;
  
@@ -526,7 +545,7 @@ rf_release(const char *path, struct fuse_file_info *fi) {
 static int
 rf_touch(const char *path, struct utimbuf *ignore) {
   debug("rf_touch(%s)\n", path);
-  rf_call(path,id_touch,Qnil);
+  rf_funcall(cRbFuse,"touch",rb_str_new_cstr(path));
   return 0;
 }
 
@@ -581,7 +600,10 @@ rf_unlink(const char *path) {
  
   /* Ok, remove it! */
   debug("  Removing it.\n");
-  rf_call(path,id_delete,Qnil);
+  VALUE args=rb_ary_new();
+  rb_ary_push(args,rb_str_new_cstr(path));
+  rf_funcall(cRbFuse,"delete",args);
+  
   return 0;
 
 }
@@ -637,7 +659,7 @@ rf_mkdir(const char *path, mode_t mode) {
     return -EACCES;
  
   /* Ok, mkdir it! */
-  rf_call(path,id_mkdir,Qnil);
+  rf_funcall(cRbFuse,"mkdir",rb_str_new_cstr(path));
   return 0;
  
 
@@ -665,7 +687,8 @@ rf_rmdir(const char *path) {
     return -EACCES;
  
   /* Ok, rmdir it! */
-  rf_call(path,id_rmdir,Qnil);
+  rf_funcall(cRbFuse,"rmdir",rb_str_new_cstr(path));
+
   return 0;
 
 }
@@ -696,8 +719,9 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
     rb_ary_push(args,rb_str_new_cstr(path));
     rb_ary_push(args,INT2NUM(offset));
     rb_ary_push(args,rb_str_new(buf,size));
+    rb_ary_push(args,fi->fh);
     rf_funcall(FuseRoot,"write",args);
-  return size;
+  return (int)size;
 
 }
 
@@ -722,6 +746,7 @@ rf_read(const char *path, char *buf, size_t size, off_t offset,
     rb_ary_push(args,rb_str_new_cstr(path));
     rb_ary_push(args,INT2NUM(offset));
     rb_ary_push(args,INT2NUM(size));
+    rb_ary_push(args,fi->fh);
     VALUE ret = rf_funcall(FuseRoot,"read",args);
     if (!RTEST(ret))
       return 0;
@@ -730,7 +755,7 @@ rf_read(const char *path, char *buf, size_t size, off_t offset,
     size_t len=RSTRING_LEN(ret);
     if(size<len)len=size;
     memcpy(buf, RSTRING_PTR(ret), len);
-    return len;
+    return (int)len;
 
  
 }
@@ -760,7 +785,7 @@ rf_statfs(const char *path, struct statvfs *buf)
  * This is utilized by rf_mount
  */
 static struct fuse_operations rf_oper = {
-    .getattr   = rf_getattr,
+    .getattr   = rf_getattr2,
     .readdir   = rf_readdir,
     .mknod     = rf_mknod,
     .unlink    = rf_unlink,
@@ -902,6 +927,7 @@ rf_gid(VALUE self) {
   return INT2NUM(fd);
 }
 
+
 /* Init_fusefs_lib()
  *
  * Used by: Ruby, to initialize FuseFS.
@@ -910,7 +936,7 @@ rf_gid(VALUE self) {
  *   its methods.
  */
 void
-Init_fusefs_lib() {
+Init_rbfuse_lib() {
   init_time = time(NULL);
 
   /* module FuseFS */
@@ -931,24 +957,16 @@ Init_fusefs_lib() {
   rb_define_singleton_method(cRbFuse,"mountpoint",  (rbfunc) rf_mount_to, -1);
   rb_define_singleton_method(cRbFuse,"set_root",    (rbfunc) rf_set_root, 1);
   rb_define_singleton_method(cRbFuse,"root=",       (rbfunc) rf_set_root, 1);
+  
 
-#undef RMETHOD
-#define RMETHOD(name,cstr) \
-  name = rb_intern(cstr);
+  rb_iv_set(cRbFuse,"@handles",rb_hash_new());
 
-  RMETHOD(id_dir_contents,"contents");
-  RMETHOD(id_read_file,"read_file");
-  RMETHOD(id_write_to,"write_to");
-  RMETHOD(id_delete,"delete");
-  RMETHOD(id_mkdir,"mkdir");
-  RMETHOD(id_rmdir,"rmdir");
-  RMETHOD(id_touch,"touch");
-  RMETHOD(id_size,"size");
-
-  RMETHOD(is_directory,"directory?");
-  RMETHOD(is_file,"file?");
-  RMETHOD(is_executable,"executable?");
+  rb_define_const(cRbFuse,"S_IFDIR",INT2FIX(S_IFDIR));
+  rb_define_const(cRbFuse,"S_IFREG",INT2FIX(S_IFREG));
 
 
-  RMETHOD(id_dup,"dup");
+
+
+
+
 }

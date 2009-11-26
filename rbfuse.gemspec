@@ -24,7 +24,13 @@ Gem::Specification.new do |s|
      "README.rdoc",
      "Rakefile",
      "VERSION",
+     "ext/MANIFEST",
+     "ext/extconf.rb",
+     "ext/rbfuse_fuse.c",
+     "ext/rbfuse_fuse.h",
+     "ext/rbfuse_lib.c",
      "lib/rbfuse.rb",
+     "rbfuse.gemspec",
      "spec/rbfuse_spec.rb",
      "spec/spec.opts",
      "spec/spec_helper.rb"

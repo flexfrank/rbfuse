@@ -18,4 +18,10 @@ coverage
 rdoc
 pkg
 
+
 ## PROJECT::SPECIFIC
+*.o
+*.so
+*.bundle
+*.log
+Makefile
