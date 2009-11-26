@@ -206,7 +206,7 @@ rf_funcall(VALUE recv,const char *methname, VALUE arg) {
 static int
 rf_getattr2(const char*path,struct stat* stbuf){
 
-  dp("rf_getattr2(%s)\n", path );
+  dp("rf_getattr2", path );
   /* Zero out the stat buffer */
   memset(stbuf, 0, sizeof(struct stat));
 
