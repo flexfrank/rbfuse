@@ -4,7 +4,8 @@
  * a Rubyish way.
  */
 
- #define DEBUG /* */
+/* #define DEBUG 
+/**/
 
 #define FUSE_USE_VERSION 26
 #define _FILE_OFFSET_BITS 64
@@ -18,7 +19,12 @@
 #include <fcntl.h>
 #include <ruby.h>
 #include <unistd.h>
+
+
+#ifdef DEBUG
 #include <stdarg.h>
+#endif
+
 
 #include "rbfuse_fuse.h"
 
@@ -30,10 +36,10 @@ time_t init_time;
 
 
 /* Ruby Constants constants */
-VALUE cRbFuse      = Qnil; /* RbFuse class */
-VALUE cFSException = Qnil; /* Our Exception. */
-VALUE FuseRoot     = Qnil; /* The root object we call */
-
+static VALUE cRbFuse      = Qnil; /* RbFuse class */
+static VALUE cFSException = Qnil; /* Our Exception. */
+static VALUE FuseRoot     = Qnil; /* The root object we call */
+static int debugMode=0;
 
 
 
@@ -60,15 +66,23 @@ typedef unsigned long int (*rbfunc)();
  *
  * If #define DEBUG is enabled, then this acts as a printf to stderr
  */
+#ifdef DEBUG
 static inline void
 debug(const char *msg,...) {
-#ifdef DEBUG
   va_list ap;
   va_start(ap,msg);
   vfprintf(stderr,msg,ap);
-#endif
 }
+#else
+#define debug 
 
+#endif
+
+static inline void dp(const char* message,const char* path){
+  if(debugMode){
+    printf("--- %s (%s)\n",message,path);
+  }
+}
 static VALUE
 rf_funcall(VALUE recv,const char *methname, VALUE arg) ;
 
@@ -114,12 +128,20 @@ rf_protected_call(VALUE args) {
   return rb_apply(recv,to_call,args);
 }
 
+static VALUE
+rf_rescue(VALUE data,VALUE exception){
+  if(debugMode){
+    rb_p(ID2SYM(rb_intern("error")));
+    rb_p(exception);
+    rb_p(rb_funcall(exception,rb_intern("backtrace"),0));
+  }
+  return Qnil;
+}
 
 
 
 static VALUE
 rf_funcall(VALUE recv,const char *methname, VALUE arg) {
-  int error;
   VALUE result;
   VALUE methargs;
 
@@ -127,6 +149,7 @@ rf_funcall(VALUE recv,const char *methname, VALUE arg) {
 
   if (!rb_respond_to(recv,method)) {
     debug("not respond %s",methname);
+    rb_p(recv);
     return Qnil;
   }
 
@@ -149,16 +172,26 @@ rf_funcall(VALUE recv,const char *methname, VALUE arg) {
   rb_ary_unshift(methargs,recv);
 
   /* Set up the call and make it. */
-  result = rb_protect(rf_protected_call, methargs, &error);
+  result = rb_rescue(rf_protected_call, methargs, rf_rescue, Qnil);
  
-  /* Did it error? */
-  if (error){debug("error\n"); return Qnil;}
 
   return result;
 }
 
 
 
+
+#define RF_READDIR  "readdir"
+#define RF_OPEN     "open"
+#define RF_READ     "read"
+#define RF_WRITE    "write"
+#define RF_CLOSE    "close"
+#define RF_DELETE   "delete"
+#define RF_MKDIR    "mkdir"
+#define RF_RMDIR    "rmdir"
+#define RF_TRUNCATE "truncate"
+#define RF_RENAME   "rename"
+#define RF_CREATE   "create"
 
 /* rf_getattr
  *
@@ -173,7 +206,7 @@ rf_funcall(VALUE recv,const char *methname, VALUE arg) {
 static int
 rf_getattr2(const char*path,struct stat* stbuf){
 
-  debug("rf_getattr2(%s)\n", path );
+  dp("rf_getattr2(%s)\n", path );
   /* Zero out the stat buffer */
   memset(stbuf, 0, sizeof(struct stat));
 
@@ -247,7 +280,7 @@ static int
 rf_getattr(const char *path, struct stat *stbuf) {
   /* If it doesn't exist, it doesn't exist. Simple as that. */
 
-  debug("rf_getattr(%s)\n", path );
+  dp("rf_getattr", path );
   /* Zero out the stat buffer */
   memset(stbuf, 0, sizeof(struct stat));
 
@@ -272,7 +305,7 @@ rf_getattr(const char *path, struct stat *stbuf) {
    * Otherwise, -ENOENT */
   VALUE vpath=rb_str_new_cstr(path);
   debug("Checking filetype ...");
-  if (RTEST(rf_funcall(cRbFuse, "directory?",vpath))) {
+  if (RTEST(rf_funcall(FuseRoot, "directory?",vpath))) {
     debug(" directory.\n");
     stbuf->st_mode = S_IFDIR | 0555;
     stbuf->st_nlink = 1;
@@ -283,18 +316,18 @@ rf_getattr(const char *path, struct stat *stbuf) {
     stbuf->st_atime = init_time;
     stbuf->st_ctime = init_time;
     return 0;
-  } else if (RTEST(rf_funcall(cRbFuse,"file?",vpath))) {
+  } else if (RTEST(rf_funcall(FuseRoot,"file?",vpath))) {
     VALUE rsize;
     debug(" file.\n");
     stbuf->st_mode = S_IFREG | 0444;
     if (writable(path)) {
       stbuf->st_mode |= 0666;
     }
-    if (RTEST(rf_funcall(cRbFuse,"executable?",vpath))) {
+    if (RTEST(rf_funcall(FuseRoot,"executable?",vpath))) {
       stbuf->st_mode |= 0111;
     }
     stbuf->st_nlink = 1 ;
-    if (RTEST(rsize = rf_funcall(cRbFuse,"size",vpath)) && FIXNUM_P(rsize)) {
+    if (RTEST(rsize = rf_funcall(FuseRoot,"size",vpath)) && FIXNUM_P(rsize)) {
       stbuf->st_size = FIX2LONG(rsize);
     } else {
       stbuf->st_size = 0;
@@ -326,7 +359,7 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
            off_t offset, struct fuse_file_info *fi) {
   VALUE retval;
 
-  debug("rf_readdir(%s)\n", path );
+  dp("rf_readdir", path );
 
   /* This is what fuse does to turn off 'unused' warnings. */
   (void) offset;
@@ -344,7 +377,7 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
   if (strcmp(path,"/") != 0) {
     debug("  Checking is_directory? ...");
-    retval = rf_funcall(cRbFuse,"directory?",rb_str_new_cstr(path));
+    retval = rf_funcall(FuseRoot,"directory?",rb_str_new_cstr(path));
 
     if (!RTEST(retval)) {
       debug(" no.\n");
@@ -359,7 +392,7 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
   VALUE args=rb_ary_new();
   rb_ary_push(args,rb_str_new_cstr(path));
-  retval = rf_funcall(cRbFuse, "contents",args);
+  retval = rf_funcall(FuseRoot, RF_READDIR,args);
   if (!RTEST(retval)) {
     return 0;
   }
@@ -392,7 +425,7 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 static int
 rf_mknod(const char *path, mode_t umode, dev_t rdev) {
 
-  debug("rf_mknod(%s)\n", path);
+  dp("rf_mknod", path);
   /* Make sure it's not already open. */
   
   debug("  Checking if it's opened ...");
@@ -428,7 +461,7 @@ rf_mknod(const char *path, mode_t umode, dev_t rdev) {
   VALUE args=rb_ary_new();
   VALUE pv=rb_str_new_cstr(path);
   rb_ary_push(args,pv);
-  rf_funcall(FuseRoot,"create",args);
+  rf_funcall(FuseRoot,RF_CREATE,args);
 
 
   return 0;
@@ -456,7 +489,7 @@ static int
 rf_open(const char *path, struct fuse_file_info *fi) {
   char open_opts[4], *optr;
 
-  debug("rf_open(%s)\n", path);
+  dp("rf_open", path);
 
  
 
@@ -491,15 +524,11 @@ rf_open(const char *path, struct fuse_file_info *fi) {
   rb_ary_push(args,rb_str_new_cstr(path));
   rb_ary_push(args,rb_str_new_cstr(open_opts));
   rb_ary_push(args,handle);
-  if (RTEST(rf_funcall(FuseRoot,"open",args))) {
+  if (RTEST(rf_funcall(FuseRoot,RF_OPEN,args))) {
     return 0;
   }else{
     return -ENOENT;
-  }
-
- 
-
-}
+  }}
 
 /* rf_release
  *
@@ -515,7 +544,7 @@ rf_open(const char *path, struct fuse_file_info *fi) {
  */
 static int
 rf_release(const char *path, struct fuse_file_info *fi) {
-   debug("rf_release(%s)\n", path);
+   dp("rf_release", path);
 
   VALUE handle=fi->fh;
   
@@ -525,7 +554,7 @@ rf_release(const char *path, struct fuse_file_info *fi) {
   VALUE args=rb_ary_new();
   rb_ary_push(args,rb_str_new_cstr(path));
   rb_ary_push(args,handle);
-  rf_funcall(FuseRoot,"close",args);
+  rf_funcall(FuseRoot,RF_CLOSE,args);
   VALUE h_table=handle_table();
   rb_hash_delete(h_table,handle);
   rb_p(h_table);
@@ -544,8 +573,8 @@ rf_release(const char *path, struct fuse_file_info *fi) {
  */
 static int
 rf_touch(const char *path, struct utimbuf *ignore) {
-  debug("rf_touch(%s)\n", path);
-  rf_funcall(cRbFuse,"touch",rb_str_new_cstr(path));
+  dp("rf_touch", path);
+  rf_funcall(FuseRoot,"touch",rb_str_new_cstr(path));
   return 0;
 }
 
@@ -564,7 +593,7 @@ rf_rename(const char *path, const char *dest) {
   VALUE args=rb_ary_new();
   rb_ary_push(args,pathv);
   rb_ary_push(args,destv);
-  VALUE ret=rf_funcall(FuseRoot,"rename",args);
+  VALUE ret=rf_funcall(FuseRoot,RF_RENAME,args);
   if(RTEST(ret)){
     return 0;
   }else{
@@ -581,6 +610,7 @@ rf_rename(const char *path, const char *dest) {
  */
 static int
 rf_unlink(const char *path) {
+  dp("unlink",path);
   /* Does it exist to be removed? */
   debug("  Checking if it exists...");
   VALUE stat=get_stat(path);
@@ -602,7 +632,7 @@ rf_unlink(const char *path) {
   debug("  Removing it.\n");
   VALUE args=rb_ary_new();
   rb_ary_push(args,rb_str_new_cstr(path));
-  rf_funcall(cRbFuse,"delete",args);
+  rf_funcall(FuseRoot,RF_DELETE,args);
   
   return 0;
 
@@ -617,7 +647,7 @@ rf_unlink(const char *path) {
  */
 static int
 rf_truncate(const char *path, off_t length) {
-  debug( "rf_truncate(%s,%d)\n", path, length );
+  dp( "rf_truncate", path);
 
   
 
@@ -627,11 +657,11 @@ rf_truncate(const char *path, off_t length) {
     return -ENOENT;
   }
   
-  if(rb_respond_to(FuseRoot,rb_intern("truncate"))){
+  if(rb_respond_to(FuseRoot,rb_intern(RF_TRUNCATE))){
     VALUE args=rb_ary_new();
     rb_ary_push(args,rb_str_new_cstr(path));
     rb_ary_push(args,LONG2NUM(length));
-    rf_funcall(FuseRoot,"truncate",args);
+    rf_funcall(FuseRoot,RF_TRUNCATE,args);
     return 0;
   }
 
@@ -648,7 +678,7 @@ rf_truncate(const char *path, off_t length) {
  */
 static int
 rf_mkdir(const char *path, mode_t mode) {
-  debug("rf_mkdir(%s)",path);
+  dp("rf_mkdir",path);
   /* Does it exist? */
 
   VALUE stat=get_stat(path);
@@ -659,7 +689,7 @@ rf_mkdir(const char *path, mode_t mode) {
     return -EACCES;
  
   /* Ok, mkdir it! */
-  rf_funcall(cRbFuse,"mkdir",rb_str_new_cstr(path));
+  rf_funcall(FuseRoot,RF_MKDIR,rb_str_new_cstr(path));
   return 0;
  
 
@@ -673,7 +703,7 @@ rf_mkdir(const char *path, mode_t mode) {
  */
 static int
 rf_rmdir(const char *path) {
-  debug("rf_rmdir(%s)",path);
+  dp("rf_rmdir",path);
   /* Does it exist? */
   VALUE stat=get_stat(path);
   if(RTEST(stat)){
@@ -687,7 +717,7 @@ rf_rmdir(const char *path) {
     return -EACCES;
  
   /* Ok, rmdir it! */
-  rf_funcall(cRbFuse,"rmdir",rb_str_new_cstr(path));
+  rf_funcall(FuseRoot,RF_RMDIR,rb_str_new_cstr(path));
 
   return 0;
 
@@ -703,7 +733,7 @@ rf_rmdir(const char *path) {
 static int
 rf_write(const char *path, const char *buf, size_t size, off_t offset,
          struct fuse_file_info *fi) {
-    debug("rf_write(%s)",path);
+    dp("rf_write",path);
 
 
   debug( "  Offset is %d\n", offset );
@@ -720,7 +750,7 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
     rb_ary_push(args,INT2NUM(offset));
     rb_ary_push(args,rb_str_new(buf,size));
     rb_ary_push(args,fi->fh);
-    rf_funcall(FuseRoot,"write",args);
+    rf_funcall(FuseRoot,RF_WRITE,args);
   return (int)size;
 
 }
@@ -737,7 +767,7 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
 static int
 rf_read(const char *path, char *buf, size_t size, off_t offset,
         struct fuse_file_info *fi) {
-    debug( "rf_read(%s)\n", path );
+    dp( "rf_read", path );
 
 
     /* If it's opened for raw read/write, call raw_read */
@@ -747,7 +777,7 @@ rf_read(const char *path, char *buf, size_t size, off_t offset,
     rb_ary_push(args,INT2NUM(offset));
     rb_ary_push(args,INT2NUM(size));
     rb_ary_push(args,fi->fh);
-    VALUE ret = rf_funcall(FuseRoot,"read",args);
+    VALUE ret = rf_funcall(FuseRoot,RF_READ,args);
     if (!RTEST(ret))
       return 0;
     if (TYPE(ret) != T_STRING)
@@ -927,6 +957,21 @@ rf_gid(VALUE self) {
   return INT2NUM(fd);
 }
 
+static VALUE
+rf_debugmode(VALUE self){
+  if(debugMode){
+    return Qtrue;
+  }else{
+    return Qfalse;
+  }
+}
+
+static VALUE
+rf_debugmode_set(VALUE self,VALUE val){
+  debugMode=RTEST(val);
+  return val;
+}
+
 
 /* Init_fusefs_lib()
  *
@@ -957,6 +1002,8 @@ Init_rbfuse_lib() {
   rb_define_singleton_method(cRbFuse,"mountpoint",  (rbfunc) rf_mount_to, -1);
   rb_define_singleton_method(cRbFuse,"set_root",    (rbfunc) rf_set_root, 1);
   rb_define_singleton_method(cRbFuse,"root=",       (rbfunc) rf_set_root, 1);
+  rb_define_singleton_method(cRbFuse,"debug",(rbfunc)rf_debugmode,0);
+  rb_define_singleton_method(cRbFuse,"debug=",(rbfunc)rf_debugmode_set,1);
   
 
   rb_iv_set(cRbFuse,"@handles",rb_hash_new());

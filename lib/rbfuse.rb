@@ -66,190 +66,46 @@ module RbFuse
     def scan_path(path)
       path.scan(/[^\/]+/)
     end
-  end
-  class MetaDir < FuseDir
-    def initialize
-      @subdirs  = Hash.new(nil)
-      @files    = Hash.new(nil)
+
+    def rename(path,destpath)
+      
+      fhr=Object.new
+      stat=self.stat(path)
+      return nil unless stat
+      self.open(path,"r",fhr)
+      file=self.read(path,0,stat.size,fhr)
+      self.close(path,fhr)
+
+      fh=Object.new
+      self.open(destpath,"w",fh)
+      self.write(destpath,0,file,fh)
+      self.close(destpath,fh)
+      self.delete(path)
+      true
+    rescue =>e
+      p e
     end
 
-    # Contents of directory.
-    def contents(path)
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        (@files.keys + @subdirs.keys).sort.uniq
-      when ! @subdirs.has_key?(base)
-        nil
-      when rest.nil?
-        @subdirs[base].contents('/')
+
+    def truncate(path,len)
+      fh=Object.new
+      open(path,"r",fh)
+      str=read(path,0,len,fh)
+      close(path,fh)
+      return nil unless str
+      if(str.bytesize<len)
+        str+="\0"*len-str.bytesize
       else
-        @subdirs[base].contents(rest)
+        str=str[0,len]
       end
+      fh2=Object.new
+      open(path,"w",fh2)
+      write(path,0,str,fh2)
+      close(path,fh2) 
+      true
     end
 
-    # File types
-    def directory?(path)
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        true
-      when ! @subdirs.has_key?(base)
-        false
-      when rest.nil?
-        true
-      else
-        @subdirs[base].directory?(rest)
-      end
-    end
-    def file?(path)
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        false
-      when rest.nil?
-        @files.has_key?(base)
-      when ! @subdirs.has_key?(base)
-        false
-      else
-        @subdirs[base].file?(rest)
-      end
-    end
 
-    # File Reading
-    def read_file(path)
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        nil
-      when rest.nil?
-        @files[base].to_s
-      when ! @subdirs.has_key?(base)
-        nil
-      else
-        @subdirs[base].read_file(rest)
-      end
-    end
 
-    # Write to a file
-    def can_write?(path)
-      return false unless Process.uid == RbFuse.reader_uid
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        true
-      when rest.nil?
-        true
-      when ! @subdirs.has_key?(base)
-        false
-      else
-        @subdirs[base].can_write?(rest)
-      end
-    end
-    def write_to(path,file)
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        false
-      when rest.nil?
-        @files[base] = file
-      when ! @subdirs.has_key?(base)
-        false
-      else
-        @subdirs[base].write_to(rest,file)
-      end
-    end
-
-    # Delete a file
-    def can_delete?(path)
-      return false unless Process.uid == RbFuse.reader_uid
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        false
-      when rest.nil?
-        @files.has_key?(base)
-      when ! @subdirs.has_key?(base)
-        false
-      else
-        @subdirs[base].can_delete?(rest)
-      end
-    end
-    def delete(path)
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        nil
-      when rest.nil?
-        # Delete it.
-        @files.delete(base)
-      when ! @subdirs.has_key?(base)
-        nil
-      else
-        @subdirs[base].delete(rest)
-      end
-    end
-
-    # Make a new directory
-    def can_mkdir?(path)
-      return false unless Process.uid == RbFuse.reader_uid
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        false
-      when rest.nil?
-        ! (@subdirs.has_key?(base) || @files.has_key?(base))
-      when ! @subdirs.has_key?(base)
-        false
-      else
-        @subdirs[base].can_mkdir?(rest)
-      end
-    end
-    def mkdir(path,dir=nil)
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        false
-      when rest.nil?
-        dir ||= MetaDir.new
-        @subdirs[base] = dir
-        true
-      when ! @subdirs.has_key?(base)
-        false
-      else
-        @subdirs[base].mkdir(rest,dir)
-      end
-    end
-
-    # Delete an existing directory.
-    def can_rmdir?(path)
-      return false unless Process.uid == RbFuse.reader_uid
-      base, rest = split_path(path)
-      case
-      when base.nil?
-        false
-      when rest.nil?
-        @subdirs.has_key?(base)
-      when ! @subdirs.has_key?(base)
-        false
-      else
-        @subdirs[base].can_rmdir?(rest)
-      end
-    end
-    def rmdir(path)
-      base, rest = split_path(path)
-      dir ||= MetaDir.new
-      case
-      when base.nil?
-        false
-      when rest.nil?
-        @subdirs.delete(base)
-        true
-      when ! @subdirs.has_key?(base)
-        false
-      else
-        @subdirs[base].rmdir(rest,dir)
-      end
-    end
   end
 end
