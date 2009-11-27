@@ -6,7 +6,7 @@ RbFuse is based on the existing library FuseFS and FuseFS-OSX,
 but it has the different API.
 
 == Requirements
-* Ruby (1.8 or 1.9)
+* Ruby 1.8.7, 1.9 or later
 * FUSE 2.6 or later
 
 == Copyright
