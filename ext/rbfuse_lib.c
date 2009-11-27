@@ -90,7 +90,7 @@ rf_funcall(VALUE recv,const char *methname, VALUE arg) ;
 static VALUE
 get_stat(const char* path){
   VALUE args=rb_ary_new();
-  rb_ary_push(args,rb_str_new_cstr(path));
+  rb_ary_push(args,rb_str_new2(path));
   return rf_funcall(FuseRoot,"stat",args);
 }
 static mode_t 
@@ -303,7 +303,7 @@ rf_getattr(const char *path, struct stat *stbuf) {
    * If FuseRoot says the path is a file, it's 0444.
    *
    * Otherwise, -ENOENT */
-  VALUE vpath=rb_str_new_cstr(path);
+  VALUE vpath=rb_str_new2(path);
   debug("Checking filetype ...");
   if (RTEST(rf_funcall(FuseRoot, "directory?",vpath))) {
     debug(" directory.\n");
@@ -377,7 +377,7 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
   if (strcmp(path,"/") != 0) {
     debug("  Checking is_directory? ...");
-    retval = rf_funcall(FuseRoot,"directory?",rb_str_new_cstr(path));
+    retval = rf_funcall(FuseRoot,"directory?",rb_str_new2(path));
 
     if (!RTEST(retval)) {
       debug(" no.\n");
@@ -391,7 +391,7 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   filler(buf,"..", NULL, 0);
 
   VALUE args=rb_ary_new();
-  rb_ary_push(args,rb_str_new_cstr(path));
+  rb_ary_push(args,rb_str_new2(path));
   retval = rf_funcall(FuseRoot, RF_READDIR,args);
   if (!RTEST(retval)) {
     return 0;
@@ -459,7 +459,7 @@ rf_mknod(const char *path, mode_t umode, dev_t rdev) {
 
   debug("call create method\n");
   VALUE args=rb_ary_new();
-  VALUE pv=rb_str_new_cstr(path);
+  VALUE pv=rb_str_new2(path);
   rb_ary_push(args,pv);
   rf_funcall(FuseRoot,RF_CREATE,args);
 
@@ -521,8 +521,8 @@ rf_open(const char *path, struct fuse_file_info *fi) {
   fi->fh=handle;
 
   VALUE args=rb_ary_new();
-  rb_ary_push(args,rb_str_new_cstr(path));
-  rb_ary_push(args,rb_str_new_cstr(open_opts));
+  rb_ary_push(args,rb_str_new2(path));
+  rb_ary_push(args,rb_str_new2(open_opts));
   rb_ary_push(args,handle);
   if (RTEST(rf_funcall(FuseRoot,RF_OPEN,args))) {
     return 0;
@@ -552,7 +552,7 @@ rf_release(const char *path, struct fuse_file_info *fi) {
 
   /* If it's opened for raw read/write, call raw_close */
   VALUE args=rb_ary_new();
-  rb_ary_push(args,rb_str_new_cstr(path));
+  rb_ary_push(args,rb_str_new2(path));
   rb_ary_push(args,handle);
   rf_funcall(FuseRoot,RF_CLOSE,args);
   VALUE h_table=handle_table();
@@ -573,7 +573,7 @@ rf_release(const char *path, struct fuse_file_info *fi) {
 static int
 rf_touch(const char *path, struct utimbuf *ignore) {
   dp("rf_touch", path);
-  rf_funcall(FuseRoot,"touch",rb_str_new_cstr(path));
+  rf_funcall(FuseRoot,"touch",rb_str_new2(path));
   return 0;
 }
 
@@ -586,8 +586,8 @@ rf_touch(const char *path, struct utimbuf *ignore) {
  */
 static int
 rf_rename(const char *path, const char *dest) {
-  VALUE pathv=rb_str_new_cstr(path);
-  VALUE destv=rb_str_new_cstr(dest);
+  VALUE pathv=rb_str_new2(path);
+  VALUE destv=rb_str_new2(dest);
 
   VALUE args=rb_ary_new();
   rb_ary_push(args,pathv);
@@ -630,7 +630,7 @@ rf_unlink(const char *path) {
   /* Ok, remove it! */
   debug("  Removing it.\n");
   VALUE args=rb_ary_new();
-  rb_ary_push(args,rb_str_new_cstr(path));
+  rb_ary_push(args,rb_str_new2(path));
   rf_funcall(FuseRoot,RF_DELETE,args);
   
   return 0;
@@ -658,7 +658,7 @@ rf_truncate(const char *path, off_t length) {
   
   if(rb_respond_to(FuseRoot,rb_intern(RF_TRUNCATE))){
     VALUE args=rb_ary_new();
-    rb_ary_push(args,rb_str_new_cstr(path));
+    rb_ary_push(args,rb_str_new2(path));
     rb_ary_push(args,LONG2NUM(length));
     rf_funcall(FuseRoot,RF_TRUNCATE,args);
     return 0;
@@ -688,7 +688,7 @@ rf_mkdir(const char *path, mode_t mode) {
     return -EACCES;
  
   /* Ok, mkdir it! */
-  rf_funcall(FuseRoot,RF_MKDIR,rb_str_new_cstr(path));
+  rf_funcall(FuseRoot,RF_MKDIR,rb_str_new2(path));
   return 0;
  
 
@@ -716,7 +716,7 @@ rf_rmdir(const char *path) {
     return -EACCES;
  
   /* Ok, rmdir it! */
-  rf_funcall(FuseRoot,RF_RMDIR,rb_str_new_cstr(path));
+  rf_funcall(FuseRoot,RF_RMDIR,rb_str_new2(path));
 
   return 0;
 
@@ -745,7 +745,7 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
     /* raw read */
     VALUE args = rb_ary_new();
     debug(" yes.\n");
-    rb_ary_push(args,rb_str_new_cstr(path));
+    rb_ary_push(args,rb_str_new2(path));
     rb_ary_push(args,INT2NUM(offset));
     rb_ary_push(args,rb_str_new(buf,size));
     rb_ary_push(args,fi->fh);
@@ -772,7 +772,7 @@ rf_read(const char *path, char *buf, size_t size, off_t offset,
     /* If it's opened for raw read/write, call raw_read */
     /* raw read */
     VALUE args = rb_ary_new();
-    rb_ary_push(args,rb_str_new_cstr(path));
+    rb_ary_push(args,rb_str_new2(path));
     rb_ary_push(args,INT2NUM(offset));
     rb_ary_push(args,INT2NUM(size));
     rb_ary_push(args,fi->fh);
