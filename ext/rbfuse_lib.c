@@ -557,7 +557,6 @@ rf_release(const char *path, struct fuse_file_info *fi) {
   rf_funcall(FuseRoot,RF_CLOSE,args);
   VALUE h_table=handle_table();
   rb_hash_delete(h_table,handle);
-  rb_p(h_table);
 
   return 0;
  
@@ -805,6 +804,12 @@ rf_utime(const char *path, struct utimbuf *ubuf)
 static int
 rf_statfs(const char *path, struct statvfs *buf)
 {
+  buf->f_frsize=1024;
+  buf->f_namemax=255;
+  buf->f_bsize=1024;
+  buf->f_blocks=1024*1024;
+  buf->f_bavail=1024*1024;
+  buf->f_bfree=1024*1024;
   return 0;
 }
 
