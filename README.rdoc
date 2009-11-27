@@ -1,6 +1,7 @@
 = rbfuse
 
 RbFuse is a library to use FUSE in ruby.
+
 RbFuse is based on the existing library FuseFS and FuseFS-OSX,
 but it has the different API.
 
