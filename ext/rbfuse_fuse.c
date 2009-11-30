@@ -7,6 +7,7 @@
 #define _FILE_OFFSET_BITS 64
 
 #include <fuse.h>
+#include <fuse/fuse_lowlevel.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -45,6 +46,7 @@ fusefs_unmount() {
   fuse_instance = NULL;
   free(mounted_at);
   fusech = NULL;
+  return 0;
 }
 
 static void
