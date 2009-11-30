@@ -9,6 +9,27 @@ but it has the different API.
 * Ruby 1.8.7, 1.9 or later
 * FUSE 2.6 or later
 
+== How to Run
+ reuqire "rubygems"
+ require "rbfuse"
+
+ RbFuse.set_root(filesystem_object)
+ RbFuse.mount_under(path_to_mount_directory)
+ RbFuse.run
+
+== How to Implement Your Filesystem
+* Define a subclass of RbFuse::FuseDir
+* Implement following methods:
+** readdir(path) #=> [filename, ...]
+** getattr(path) #=> FuseFS::Stat 
+** open(path,mode,handle) 
+** read(path,offset,size,handle) #=>String
+** write(path,offset,str, handle)
+** close(path,handle)
+** unlink(path)
+** mkdir(path,perm)
+** rmdir(path)
+
 == Copyright
 
 Copyright (c) 2009 Shumpei Akai. See LICENSE for details.
