@@ -13,6 +13,8 @@ begin
     gem.add_development_dependency "rspec", ">= 1.2.9"
     gem.extensions=["ext/extconf.rb"]
     gem.files.include 'lib/**/*.rb'
+    gem.files.include 'ext/**/*.h'
+    gem.files.include 'ext/**/*.c'
     # gem is a Gem::Specification... see http://www.rubygems.org/read/chapter/20 for additional settings
   end
   Jeweler::GemcutterTasks.new
