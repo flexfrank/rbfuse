@@ -82,8 +82,6 @@ module RbFuse
       self.close(destpath,fh)
       self.delete(path)
       true
-    rescue =>e
-      p e
     end
 
 
@@ -106,6 +104,12 @@ module RbFuse
     end
 
 
+    def create(path,mode)
+      handle=Object.new
+      self.open(path,"w",handle)
+      self.write(path,0,"",handle)
+      self.close(path,handle)
+    end
 
   end
 end

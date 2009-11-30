@@ -1,16 +1,14 @@
 # encoding: utf-8
 require "rubygems"
 require "rbfuse"
-#require "fusefs"
-#RbFuse=FuseFS
 require "roma/client"
 
 require "json"
 
 class RomaFS < RbFuse::FuseDir
   def initialize(roma_node)
-    @table =Roma::Client::RomaClient.new(roma_node)
     #@table={}
+    @table =Roma::Client::RomaClient.new(roma_node)
     ent=dir_entries("/")
     if !ent
       set_dir("/",[])
@@ -53,8 +51,6 @@ class RomaFS < RbFuse::FuseDir
       dirname=File.dirname(path)
       set_dir(dirname,dir_entries(dirname)-[File.basename(path)])
     end
-  rescue =>e
-   p e
   end
 
   def file?(path)
@@ -85,7 +81,7 @@ class RomaFS < RbFuse::FuseDir
     ents||[]
   end
 
-  def stat(path)
+  def getattr(path)
    if(file?(path))
      stat=RbFuse::Stat.file
      stat.size=size(path)
@@ -97,15 +93,6 @@ class RomaFS < RbFuse::FuseDir
    end
  
   end
-
-  def create(path)
-    p [:creaet,path]
-    set_file(path,"")
-  end
-  
-  
-  
-
 
   def open(path,mode,handle)
     buf=nil
@@ -135,11 +122,12 @@ class RomaFS < RbFuse::FuseDir
   end
 
   
-  def delete(path)
+  def unlink(path)
     delete_file(path)
     true
   end
-  def mkdir(path)
+  def mkdir(path,mode)
+    p mode
     @table[to_dirkey(path)]=JSON.dump([])
     filename=File.basename(path)
     parent_dir=File.dirname(path)

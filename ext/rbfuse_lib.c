@@ -25,6 +25,19 @@
 #include <stdarg.h>
 #endif
 
+#define RF_READDIR  "readdir"
+#define RF_OPEN     "open"
+#define RF_READ     "read"
+#define RF_WRITE    "write"
+#define RF_CLOSE    "close"
+#define RF_UNLINK   "unlink"
+#define RF_MKDIR    "mkdir"
+#define RF_RMDIR    "rmdir"
+#define RF_TRUNCATE "truncate"
+#define RF_RENAME   "rename"
+#define RF_CREATE   "create"
+#define RF_GETATTR  "getattr"
+
 
 #include "rbfuse_fuse.h"
 
@@ -91,7 +104,7 @@ static VALUE
 get_stat(const char* path){
   VALUE args=rb_ary_new();
   rb_ary_push(args,rb_str_new2(path));
-  return rf_funcall(FuseRoot,"stat",args);
+  return rf_funcall(FuseRoot,RF_GETATTR,args);
 }
 static mode_t 
 get_stat_filetype(VALUE stat){
@@ -181,18 +194,6 @@ rf_funcall(VALUE recv,const char *methname, VALUE arg) {
 
 
 
-#define RF_READDIR  "readdir"
-#define RF_OPEN     "open"
-#define RF_READ     "read"
-#define RF_WRITE    "write"
-#define RF_CLOSE    "close"
-#define RF_DELETE   "delete"
-#define RF_MKDIR    "mkdir"
-#define RF_RMDIR    "rmdir"
-#define RF_TRUNCATE "truncate"
-#define RF_RENAME   "rename"
-#define RF_CREATE   "create"
-
 /* rf_getattr
  *
  * Used when: 'ls', and before opening a file.
@@ -275,73 +276,6 @@ rf_getattr2(const char*path,struct stat* stbuf){
 }
 
 
-
-static int
-rf_getattr(const char *path, struct stat *stbuf) {
-  /* If it doesn't exist, it doesn't exist. Simple as that. */
-
-  dp("rf_getattr", path );
-  /* Zero out the stat buffer */
-  memset(stbuf, 0, sizeof(struct stat));
-
-  /* "/" is automatically a dir. */
-  if (strcmp(path,"/") == 0) {
-    stbuf->st_mode = S_IFDIR | 0755;
-    stbuf->st_nlink = 3;
-    stbuf->st_uid = getuid();
-    stbuf->st_gid = getgid();
-    stbuf->st_mtime = init_time;
-    stbuf->st_atime = init_time;
-    stbuf->st_ctime = init_time;
-    return 0;
-  }
-
- 
-
-
-  /* If FuseRoot says the path is a directory, we set it 0555.
-   * If FuseRoot says the path is a file, it's 0444.
-   *
-   * Otherwise, -ENOENT */
-  VALUE vpath=rb_str_new2(path);
-  debug("Checking filetype ...");
-  if (RTEST(rf_funcall(FuseRoot, "directory?",vpath))) {
-    debug(" directory.\n");
-    stbuf->st_mode = S_IFDIR | 0555;
-    stbuf->st_nlink = 1;
-    stbuf->st_size = 4096;
-    stbuf->st_uid = getuid();
-    stbuf->st_gid = getgid();
-    stbuf->st_mtime = init_time;
-    stbuf->st_atime = init_time;
-    stbuf->st_ctime = init_time;
-    return 0;
-  } else if (RTEST(rf_funcall(FuseRoot,"file?",vpath))) {
-    VALUE rsize;
-    debug(" file.\n");
-    stbuf->st_mode = S_IFREG | 0444;
-    if (writable(path)) {
-      stbuf->st_mode |= 0666;
-    }
-    if (RTEST(rf_funcall(FuseRoot,"executable?",vpath))) {
-      stbuf->st_mode |= 0111;
-    }
-    stbuf->st_nlink = 1 ;
-    if (RTEST(rsize = rf_funcall(FuseRoot,"size",vpath)) && FIXNUM_P(rsize)) {
-      stbuf->st_size = FIX2LONG(rsize);
-    } else {
-      stbuf->st_size = 0;
-    }
-    stbuf->st_uid = getuid();
-    stbuf->st_gid = getgid();
-    stbuf->st_mtime = init_time;
-    stbuf->st_atime = init_time;
-    stbuf->st_ctime = init_time;
-    return 0;
-  }
-  debug(" nonexistant.\n");
-  return -ENOENT;
-}
 
 /* rf_readdir
  *
@@ -427,8 +361,6 @@ rf_mknod(const char *path, mode_t umode, dev_t rdev) {
 
   dp("rf_mknod", path);
   /* Make sure it's not already open. */
-  
-  debug("  Checking if it's opened ...");
 
   /* We ONLY permit regular files. No blocks, characters, fifos, etc. */
   debug("  Checking if an IFREG is requested ...");
@@ -448,19 +380,15 @@ rf_mknod(const char *path, mode_t umode, dev_t rdev) {
   debug(" no.\n");
 
   /* Is this writable to */
-  debug("  Checking if it's writable to ...");
   if (!writable(path)) {
-    debug(" no.\n");
-    debug("  Checking if it looks like an editor tempfile...");
-    debug(" no.\n");
     return -EACCES;
   }
-  debug(" yes.\n");
 
   debug("call create method\n");
   VALUE args=rb_ary_new();
   VALUE pv=rb_str_new2(path);
   rb_ary_push(args,pv);
+  rb_ary_push(args,INT2FIX(umode));
   rf_funcall(FuseRoot,RF_CREATE,args);
 
 
@@ -512,7 +440,6 @@ rf_open(const char *path, struct fuse_file_info *fi) {
     *(optr++) = 'a';
   *(optr) = '\0';
 
-  debug("  Checking for a raw_opened file... ");
   
   VALUE handle=rb_class_new_instance(0,NULL,rb_cObject);
 
@@ -631,7 +558,7 @@ rf_unlink(const char *path) {
   debug("  Removing it.\n");
   VALUE args=rb_ary_new();
   rb_ary_push(args,rb_str_new2(path));
-  rf_funcall(FuseRoot,RF_DELETE,args);
+  rf_funcall(FuseRoot,RF_UNLINK,args);
   
   return 0;
 
@@ -687,8 +614,11 @@ rf_mkdir(const char *path, mode_t mode) {
   if (!mkdirable(path))
     return -EACCES;
  
+  VALUE args=rb_ary_new();
+  rb_ary_push(args,rb_str_new2(path));
+  rb_ary_push(args,INT2FIX(mode));
   /* Ok, mkdir it! */
-  rf_funcall(FuseRoot,RF_MKDIR,rb_str_new2(path));
+  rf_funcall(FuseRoot,RF_MKDIR,args);
   return 0;
  
 
@@ -741,7 +671,6 @@ rf_write(const char *path, const char *buf, size_t size, off_t offset,
 
   /* Make sure it's open for write ... */
   /* If it's opened for raw read/write, call raw_write */
-  debug("  Checking if it's opened for raw write...");
     /* raw read */
     VALUE args = rb_ary_new();
     debug(" yes.\n");
