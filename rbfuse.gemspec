@@ -9,7 +9,7 @@ Gem::Specification.new do |s|
 
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Shumpei Akai"]
-  s.date = %q{2009-11-30}
+  s.date = %q{2009-12-01}
   s.description = %q{fuse binding for ruby}
   s.email = %q{flexfrank@gmail.com}
   s.extensions = ["ext/extconf.rb"]
@@ -18,23 +18,7 @@ Gem::Specification.new do |s|
      "README.rdoc"
   ]
   s.files = [
-    ".document",
-     ".gitignore",
-     "LICENSE",
-     "README.rdoc",
-     "Rakefile",
-     "VERSION",
-     "ext/MANIFEST",
-     "ext/extconf.rb",
-     "ext/rbfuse_fuse.c",
-     "ext/rbfuse_fuse.h",
-     "ext/rbfuse_lib.c",
-     "lib/rbfuse.rb",
-     "rbfuse.gemspec",
-     "sample/romafs.rb",
-     "spec/rbfuse_spec.rb",
-     "spec/spec.opts",
-     "spec/spec_helper.rb"
+    "lib/rbfuse.rb"
   ]
   s.homepage = %q{http://github.com/flexfrank/rbfuse}
   s.rdoc_options = ["--charset=UTF-8"]
