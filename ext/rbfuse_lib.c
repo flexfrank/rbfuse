@@ -162,7 +162,6 @@ rf_funcall(VALUE recv,const char *methname, VALUE arg) {
 
   if (!rb_respond_to(recv,method)) {
     debug("not respond %s",methname);
-    rb_p(recv);
     return Qnil;
   }
 
