@@ -1,16 +1,25 @@
 = RbFuse API document
 
 == Methods you should implement
-=== readdir(path) #=> Array
+==== readdir(path) #=> Array
 Return an array of (file/directory) names in <i>path</i>.
-=== getattr(path) #=> RbFuse::Stat
-=== open(path,mode,filehandle)
-=== read(path,offset,size,filehandle) #=> String
-=== write(path,offset,str,filehandle)
-=== close(path,offset,filehandle)
-=== unlink(paht)
-=== mkdir(path,perm)
-=== rmdir(path)
+==== getattr(path) #=> RbFuse::Stat
+Return information of an entry pointed to by <i>path</i>.
+
+If <i>path</i> is a file, create a Stat object by calling <i>RbFuse::Stat.file</i>,
+and set the <i>size</i> attribute.
+
+If <i>path</i> is a directory, return <i>RbFuse::Stat.dir</i>.
+
+If <i>path</i> does not exist, return _nil_.
+
+==== open(path,mode,filehandle)
+==== read(path,offset,size,filehandle) #=> String
+==== write(path,offset,str,filehandle)
+==== close(path,offset,filehandle)
+==== unlink(paht)
+==== mkdir(path,perm)
+==== rmdir(path)
 
 == RbFuse::Stat
 This class represents a "struct stat".
