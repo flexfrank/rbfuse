@@ -17,16 +17,16 @@ For a directory, Stat.dir is available.
 
 
 === attributes
-- perm  : Fixnum
- - Permission of a file/directory
-- filetype : Fixnum
- - Type of entry.
- - RbFuse::S_IFREG or RbFuse::S_IFDIR
-- size : Integer
- - File size (in bytes).
-- nlink : Integer
- - Number of hard links to the entry.
-- uid,gid : Fixnum
- - User ID and Group ID.
-- atime, mtime, ctime : Time
- - Time of last access/modification/status-change.
+* perm  : Fixnum
+ * Permission of a file/directory
+* filetype : Fixnum
+ * Type of entry.
+ * RbFuse::S_IFREG or RbFuse::S_IFDIR
+* size : Integer
+ * File size (in bytes).
+* nlink : Integer
+ * Number of hard links to the entry.
+* uid,gid : Fixnum
+ * User ID and Group ID.
+* atime, mtime, ctime : Time
+ * Time of last access/modification/status-change.
