@@ -21,7 +21,7 @@ but it has the different API.
 * Define a subclass of RbFuse::FuseDir
 * Implement following methods:
   * readdir(path) #=> [filename, ...]
-  * getattr(path) #=> FuseFS::Stat 
+  * getattr(path) #=> RbFuse::Stat 
   * open(path,mode,handle) 
   * read(path,offset,size,handle) #=>String
   * write(path,offset,str, handle)
