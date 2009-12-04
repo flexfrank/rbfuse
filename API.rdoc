@@ -2,6 +2,7 @@
 
 == Methods you should implement
 === readdir(path) #=> Array
+Return an array of (file/directory) names in <i>path</i>.
 === getattr(path) #=> RbFuse::Stat
 === open(path,mode,filehandle)
 === read(path,offset,size,filehandle) #=> String
@@ -12,8 +13,11 @@
 === rmdir(path)
 
 == RbFuse::Stat
-If you need the Stat for a file, you should call Stat.file.
-For a directory, Stat.dir is available.
+This class represents a "struct stat".
+An instance of Stat is used in <i>getattr</i> method.
+
+If you need the Stat for a file, you can use the return value of <i>Stat.file</i> method.
+For a directory, <i>Stat.dir</i> is available.
 
 
 === attributes
