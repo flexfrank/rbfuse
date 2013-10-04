@@ -280,10 +280,6 @@ rf_getattr2(const char*path,struct stat* stbuf){
  *
  * Used when: 'ls'
  *
- * FuseFS will call: 'directory?' on FuseRoot with the given path
- *   as an argument. If the return value is true, then it will in turn
- *   call 'contents' and expects to receive an array of file contents.
- *
  * '.' and '..' are automatically added, so the programmer does not
  *   need to worry about those.
  */
@@ -308,17 +304,6 @@ rf_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return -ENOENT;
   }
 
-  if (strcmp(path,"/") != 0) {
-    debug("  Checking is_directory? ...");
-    retval = rf_funcall(FuseRoot,"directory?",rb_str_new2(path));
-
-    if (!RTEST(retval)) {
-      debug(" no.\n");
-      return -ENOENT;
-    }
-    debug(" yes.\n");
-  }
- 
   /* These two are Always in a directory */
   filler(buf,".", NULL, 0);
   filler(buf,"..", NULL, 0);
